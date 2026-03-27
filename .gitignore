@@ -1,0 +1,5 @@
+/.env
+/data/postgres/
+/data/redis/
+/data/minio/
+.idea/
