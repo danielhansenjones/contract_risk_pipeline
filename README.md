@@ -8,7 +8,7 @@
 [![faithfulness](https://img.shields.io/badge/RAG%20faithfulness-0.98-success)](#results)
 [![citations](https://img.shields.io/badge/citation%20accuracy-0.95-success)](#results)
 [![F1](https://img.shields.io/badge/span%20macro%20F1-0.41%20to%200.73-success)](#results)
-[![tests](https://img.shields.io/badge/tests-229%20passing-success)](#results)
+[![tests](https://img.shields.io/badge/tests-239%20passing-success)](#results)
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -80,9 +80,9 @@ The judgment on what to negotiate stays with the lawyer.
 </details>
 
 <details>
-<summary><b>Testing and ops</b> - 229 tests, single-command stack</summary>
+<summary><b>Testing and ops</b> - 239 tests, single-command stack</summary>
 
-- **229 tests** covering API contracts, pipeline stages, queue semantics, auth, rate limits, idempotency, upload sizing, span extraction, timeout fallback, embeddings, citation grounding, the RAG endpoint, and the CUAD feature prep, span aggregation, and eval harness.
+- **239 tests** covering API contracts, pipeline stages, queue semantics, auth, rate limits, idempotency, upload sizing, span extraction, timeout fallback, embeddings, citation grounding, the RAG endpoint, the LLM judges, and the CUAD feature prep, span aggregation, and eval harness.
 - **Single-command local stack** via Docker Compose (Postgres+pgvector, Redis, MinIO, API, worker).
 
 </details>
@@ -177,9 +177,9 @@ flowchart LR
 | Throughput, single worker           | 9.6 jobs/min                                                |
 | Submit latency p50                  | 14 ms (62 ms under a 20 VU spike)                           |
 | Server errors under load            | 0                                                           |
-| Tests                               | 229                                                         |
+| Tests                               | 239                                                         |
 
-Measurement dates: RAG eval scores are the full 46-case run from 2026-07-03, load figures are Locust runs against the 2026-05 build, and the test count is from a full local run on 2026-06-11.
+Measurement dates: RAG eval scores are the full 46-case run from 2026-07-03, load figures are Locust runs against the 2026-05 build, and the test count is from a full local run on 2026-07-03.
 
 ![CUAD per-category F1: BART-MNLI zero-shot vs fine-tuned RoBERTa](assets/cuad_per_category_f1.png)
 
