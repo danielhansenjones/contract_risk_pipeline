@@ -143,22 +143,26 @@ def _run_case(case: dict, fixture_jobs: dict[str, str], db, judge_model: str) ->
         for cite in response.citations
     ]
 
-    faith = judges.judge_faithfulness(
-        case["question"], response.answer, citations_with_text, model=judge_model
-    )
-    citacc = judges.judge_citation_accuracy(
-        case["question"], response.answer, citations_with_text, model=judge_model
-    )
-    comp = judges.judge_completeness(
-        case["question"],
-        response.answer,
-        case.get("reference_answer"),
-        case.get("reference_keywords", []),
-        model=judge_model,
-    )
-    ref = judges.judge_refusal_correctness(
-        case["expected_refusal"], response.refusal_reason is not None
-    )
+    try:
+        faith = judges.judge_faithfulness(
+            case["question"], response.answer, citations_with_text, model=judge_model
+        )
+        citacc = judges.judge_citation_accuracy(
+            case["question"], response.answer, citations_with_text, model=judge_model
+        )
+        comp = judges.judge_completeness(
+            case["question"],
+            response.answer,
+            case.get("reference_answer"),
+            case.get("reference_keywords", []),
+            model=judge_model,
+        )
+        ref = judges.judge_refusal_correctness(
+            case["expected_refusal"], response.refusal_reason is not None
+        )
+    except Exception as exc:
+        logger.exception("eval: case %s failed during judging", case_id)
+        return {"case_id": case_id, "error": f"judging failed: {exc}"}
 
     return {
         "case_id": case_id,

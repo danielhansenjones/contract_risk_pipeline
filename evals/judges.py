@@ -5,11 +5,13 @@ model defaults to claude-haiku-4-5 (deliberately different from the generator
 to reduce self-grading bias); a second judge (claude-opus-4-7) is opt-in for
 inter-judge agreement runs.
 """
+import copy
+import json
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, get_origin
 
 import anthropic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from shared.settings import settings
 
@@ -72,38 +74,100 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 
+def _strict_schema(schema_cls: type[BaseModel]) -> dict:
+    # Strict tool use constrains decoding to the schema, which eliminates the
+    # malformed-judgment failure mode entirely. Strict mode requires
+    # additionalProperties: false and a full required list on every object,
+    # and rejects numeric bounds (minimum/maximum from pydantic's ge/le);
+    # pydantic still enforces those bounds client-side in model_validate.
+    schema = copy.deepcopy(schema_cls.model_json_schema())
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                node["additionalProperties"] = False
+                if node.get("properties"):
+                    node["required"] = list(node["properties"])
+            for key in ("minimum", "maximum", "default"):
+                node.pop(key, None)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(schema)
+    return schema
+
+
+def _coerce_stringified_lists(data: dict, schema_cls: type[BaseModel]) -> dict:
+    # The judge occasionally encodes a nested list argument as a JSON string
+    # instead of an array; decode it so validation sees the intended shape.
+    for name, field in schema_cls.model_fields.items():
+        value = data.get(name)
+        if isinstance(value, str) and get_origin(field.annotation) is list:
+            try:
+                data[name] = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+    return data
+
+
 def _call_judge(
     model: str,
     system: str,
     user: str,
     schema_cls: type[BaseModel],
 ) -> BaseModel:
-    msg = _client().messages.create(
-        model=model,
-        max_tokens=2048,
-        system=[
-            {
-                "type": "text",
-                "text": system,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user}],
-        tools=[
-            {
-                "name": "submit_judgment",
-                "description": "Submit the structured judgment.",
-                "input_schema": schema_cls.model_json_schema(),
-            }
-        ],
-        tool_choice={"type": "tool", "name": "submit_judgment"},
-    )
-    tool_use_blocks = [b for b in msg.content if b.type == "tool_use"]
-    if not tool_use_blocks:
-        raise RuntimeError(
-            f"judge {schema_cls.__name__} returned no tool_use block"
+    # Strict decoding should make malformed judgments impossible; the retry
+    # and list coercion below stay as a backstop because raising here would
+    # discard every already-paid-for case in the run.
+    tool = {
+        "name": "submit_judgment",
+        "description": "Submit the structured judgment.",
+        "strict": True,
+        "input_schema": _strict_schema(schema_cls),
+    }
+    last_exc: Optional[Exception] = None
+    for attempt in (1, 2):
+        msg = _client().messages.create(
+            model=model,
+            max_tokens=2048,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user}],
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "submit_judgment"},
         )
-    return schema_cls.model_validate(tool_use_blocks[0].input)
+        tool_use_blocks = [b for b in msg.content if b.type == "tool_use"]
+        if not tool_use_blocks:
+            last_exc = RuntimeError(
+                f"judge {schema_cls.__name__} returned no tool_use block"
+            )
+            logger.warning(
+                "judge %s: no tool_use block on attempt %d",
+                schema_cls.__name__,
+                attempt,
+            )
+            continue
+        data = tool_use_blocks[0].input
+        if isinstance(data, dict):
+            data = _coerce_stringified_lists(data, schema_cls)
+        try:
+            return schema_cls.model_validate(data)
+        except ValidationError as exc:
+            last_exc = exc
+            logger.warning(
+                "judge %s: invalid judgment shape on attempt %d",
+                schema_cls.__name__,
+                attempt,
+            )
+    raise last_exc
 
 
 _FAITHFULNESS_SYSTEM = (
