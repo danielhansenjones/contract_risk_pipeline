@@ -6,7 +6,7 @@ ROOT = Path(__file__).parent.parent
 
 if __name__ == "__main__":
     subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/"],
+        [sys.executable, "-m", "pytest"],
         cwd=ROOT,
         check=True,
     )
