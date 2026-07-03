@@ -5,10 +5,10 @@
 **Fault-Tolerant Contract-Risk Pipeline with Grounded RAG and LLM-as-Judge Evals**
 
 [![CI](https://github.com/danielhansenjones/verity/actions/workflows/ci.yml/badge.svg)](https://github.com/danielhansenjones/verity/actions/workflows/ci.yml)
-[![faithfulness](https://img.shields.io/badge/RAG%20faithfulness-0.97-success)](#results)
-[![citations](https://img.shields.io/badge/citation%20accuracy-1.00-success)](#results)
+[![faithfulness](https://img.shields.io/badge/RAG%20faithfulness-0.98-success)](#results)
+[![citations](https://img.shields.io/badge/citation%20accuracy-0.95-success)](#results)
 [![F1](https://img.shields.io/badge/span%20macro%20F1-0.41%20to%200.73-success)](#results)
-[![tests](https://img.shields.io/badge/tests-169%20passing-success)](#results)
+[![tests](https://img.shields.io/badge/tests-229%20passing-success)](#results)
 
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -21,6 +21,8 @@
 
 </div>
 
+![Upload a contract, watch the pipeline stages, get the risk report, ask a grounded question](assets/demo.gif)
+
 A distributed document processing pipeline built on Redis Streams, PostgreSQL, and MinIO.
 Accepts PDF uploads over a hardened REST API, queues jobs for async worker processing, and returns structured risk reports from a two-tier ML cascade:
 BART-MNLI zero-shot clause classification feeding into fine-tuned RoBERTa span extraction on flagged clauses, with rule-based risk flags and verbatim evidence spans.
@@ -32,8 +34,6 @@ The goal is to automate the repetitive part and surface structured evidence so t
 The judgment on what to negotiate stays with the lawyer.
 
 ## Highlights
-
-A few flagship properties up front; grouped detail below is collapsed to keep this scannable.
 
 - **At-least-once delivery** with crash recovery: Redis Streams consumer groups plus `XAUTOCLAIM` reclaim of dead workers. No in-flight job is silently lost.
 - **Two-tier ML cascade** lifts span-extraction trimmed macro F1 from 0.41 (zero-shot) to 0.73 (fine-tuned base).
@@ -75,14 +75,14 @@ A few flagship properties up front; grouped detail below is collapsed to keep th
 
 - **RAG query endpoint with verified citations.** `POST /jobs/{id}/ask` runs free-text questions against the contract's chunks. Local BGE-small embeddings stored in a pgvector column on Postgres, cosine-similarity retrieval, Claude generation with structured outputs, and a post-generation grounding check that rejects fabricated quotes or chunk ids with `502`. The deterministic pipeline remains fully functional without this endpoint.
 - **Auditable RAG calls.** Every `/ask` is persisted to a `rag_queries` table: the question, ordered retrieved chunk ids, answer, citations, token usage, retrieval and generation latency, and the terminal outcome (answered, refused, or error with the grounding failure). Storing chunk ids rather than text reconstructs the exact prompt for any past call, since chunks are immutable. Writes are best-effort and never fail a good answer.
-- **Hand-rolled RAG eval harness with LLM-as-judge.** 30-case dataset scored across faithfulness, citation accuracy, completeness, and refusal correctness. Judge model (`claude-haiku-4-5`) is deliberately different from the generator (`claude-sonnet-4-6`) to reduce self-grading bias. First-run aggregate 0.967 / 1.000 / 0.967 / 1.000 with multi-clause synthesis as the documented soft spot at 0.833 faithfulness. CI re-runs a frozen subset on PRs touching the RAG surface.
+- **Hand-rolled RAG eval harness with LLM-as-judge.** 46 cases across three contracts (two credit agreements, one services agreement), scored on faithfulness, citation accuracy, completeness, and refusal correctness, including adversarial refusal cases that ask for plausible-but-absent clauses. Judge model (`claude-haiku-4-5`) is deliberately different from the generator (`claude-sonnet-4-6`) to reduce self-grading bias, and judge calls use strict tool use so a malformed judgment cannot poison a run. Aggregate 0.982 / 0.946 / 0.935 / 0.957; the documented soft spot is retrieval recall on buried facts, where the system refuses rather than fabricates. CI re-runs a frozen subset on PRs touching the RAG surface.
 
 </details>
 
 <details>
-<summary><b>Testing and ops</b> - 169 tests, single-command stack</summary>
+<summary><b>Testing and ops</b> - 229 tests, single-command stack</summary>
 
-- **169 tests** covering API contracts, pipeline stages, queue semantics, auth, rate limits, idempotency, upload sizing, span extraction, timeout fallback, embeddings, citation grounding, and the RAG endpoint.
+- **229 tests** covering API contracts, pipeline stages, queue semantics, auth, rate limits, idempotency, upload sizing, span extraction, timeout fallback, embeddings, citation grounding, the RAG endpoint, and the CUAD feature prep, span aggregation, and eval harness.
 - **Single-command local stack** via Docker Compose (Postgres+pgvector, Redis, MinIO, API, worker).
 
 </details>
@@ -171,19 +171,21 @@ flowchart LR
 | Metric                              | Value                                                       |
 |-------------------------------------|-------------------------------------------------------------|
 | Span-extraction macro F1            | 0.41 zero-shot to 0.73 fine-tuned (RoBERTa-base on CUAD v1) |
-| RAG faithfulness (LLM-as-judge)     | 0.967                                                       |
-| Citation accuracy                   | 1.000                                                       |
-| Completeness / refusal correctness  | 0.967 / 1.000                                               |
+| RAG faithfulness (LLM-as-judge)     | 0.982                                                       |
+| Citation accuracy                   | 0.946                                                       |
+| Completeness / refusal correctness  | 0.935 / 0.957                                               |
 | Throughput, single worker           | 9.6 jobs/min                                                |
 | Submit latency p50                  | 14 ms (62 ms under a 20 VU spike)                           |
 | Server errors under load            | 0                                                           |
-| Tests                               | 169                                                         |
+| Tests                               | 229                                                         |
+
+Measurement dates: RAG eval scores are the full 46-case run from 2026-07-03, load figures are Locust runs against the 2026-05 build, and the test count is from a full local run on 2026-06-11.
 
 ![CUAD per-category F1: BART-MNLI zero-shot vs fine-tuned RoBERTa](assets/cuad_per_category_f1.png)
 
 *Per-category F1 across all 41 CUAD categories. Blue is BART-MNLI zero-shot; orange and green are fine-tuned RoBERTa (base and large). Fine-tuning closes the largest gaps on categories zero-shot barely handles (Anti-Assignment, Effective Date, Governing Law, Expiration Date).*
 
-RAG eval is a 30-case dataset scored by an LLM judge (`claude-haiku-4-5`) that is deliberately different from the generator (`claude-sonnet-4-6`) to reduce self-grading bias. Multi-clause synthesis is the documented soft spot at 0.833 faithfulness. Full methodology is in [cuad/README.md](cuad/README.md).
+RAG eval is a 46-case dataset across three contract genres (two credit agreements, one services agreement sourced from SEC EDGAR), scored by an LLM judge (`claude-haiku-4-5`) that is deliberately different from the generator (`claude-sonnet-4-6`) to reduce self-grading bias. Four refusal cases are adversarial: they ask for clauses that are plausible for the genre but absent from the document, such as SLA credits or minimum insurance coverage in a services agreement. Two soft spots are documented. Refusal correctness (0.957) reflects one adversarial case answered with a cited "not specified in this agreement" instead of a refusal. Completeness (0.935) reflects retrieval misses on buried facts: when the relevant clause is not in the retrieved top-k, the system refuses or answers conservatively from what it did retrieve rather than fabricating. Full methodology is in [cuad/README.md](cuad/README.md).
 
 
 ## Stack
@@ -262,7 +264,7 @@ Auth, rate limits, idempotency semantics, full request/response shapes, and the 
 
 ### Audit log retention and sensitive data
 
-The `rag_queries` table grows without bound: every `/ask` appends a row and nothing prunes them. Production deployments should set a retention window, 90 days is a reasonable default, and delete older rows on a schedule. That pruner is not part of this change.
+The `rag_queries` table grows without bound: every `/ask` appends a row and nothing prunes them. Production deployments should set a retention window, 90 days is a reasonable default, and delete older rows on a schedule. No pruner ships with this repo.
 
 Questions and stored answers can carry PII or commercially sensitive terms, written verbatim to `rag_queries.question` and `rag_queries.answer`. Deployments handling real contracts should enable Postgres encryption at rest, restrict the database role that can read this table to the principals that actually need audit access, and consider field-level redaction at write time if the exposure scope warrants it.
 
@@ -298,3 +300,7 @@ Both are plain Python files. Point PyCharm's Run/Debug buttons directly at them.
 
 - [TECHNICAL.md](TECHNICAL.md) - auth, limits, idempotency, metrics, pipeline stages, RAG layer, architecture and scaling numbers, CUAD v2 cascade, project structure, fault tolerance, design decisions.
 - [cuad/README.md](cuad/README.md) - CUAD training hyperparameters, data split methodology, per-category F1 results.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
