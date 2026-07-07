@@ -2,30 +2,26 @@
 
 # Verity
 
-**Fault-Tolerant Contract-Risk Pipeline with Grounded RAG and LLM-as-Judge Evals**
+**A fault-tolerant contract-review pipeline: Redis Streams delivery that survives worker crashes, a fine-tuned RoBERTa span extractor, and a grounded RAG endpoint that refuses to fabricate.**
 
 [![CI](https://github.com/danielhansenjones/verity/actions/workflows/ci.yml/badge.svg)](https://github.com/danielhansenjones/verity/actions/workflows/ci.yml)
-[![faithfulness](https://img.shields.io/badge/RAG%20faithfulness-0.98-success)](#results)
-[![citations](https://img.shields.io/badge/citation%20accuracy-0.95-success)](#results)
-[![F1](https://img.shields.io/badge/span%20macro%20F1-0.41%20to%200.73-success)](#results)
-[![tests](https://img.shields.io/badge/tests-239%20passing-success)](#results)
+[![span macro F1](https://img.shields.io/badge/span%20macro%20F1-0.73-success)](#results)
+[![RAG faithfulness](https://img.shields.io/badge/RAG%20faithfulness-0.98-success)](#results)
 
-[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![FastAPI](https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Redis](https://img.shields.io/badge/Redis%207-Streams-DC382D?logo=redis&logoColor=white)](https://redis.io/docs/latest/develop/data-types/streams/)
-[![Postgres](https://img.shields.io/badge/Postgres%2016-pgvector-4169E1?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![fine-tune](https://img.shields.io/badge/fine--tune-RoBERTa%20on%20CUAD%20v1-2b6cb0)](cuad/README.md)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-Transformers-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/)
-[![Anthropic](https://img.shields.io/badge/Anthropic-Sonnet%20%2B%20Haiku-D97757?logo=anthropic&logoColor=white)](https://www.anthropic.com/)
-[![MinIO](https://img.shields.io/badge/MinIO-S3-C72E49?logo=minio&logoColor=white)](https://min.io/)
-[![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![Anthropic](https://img.shields.io/badge/Anthropic-Sonnet%20%2B%20Haiku-D97757?logo=anthropic&logoColor=white)](#rag-query-flow-post-ask)
+[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
 
 ![Upload a contract, watch the pipeline stages, get the risk report, ask a grounded question](assets/demo.gif)
 
-A distributed document processing pipeline built on Redis Streams, PostgreSQL, and MinIO.
-Accepts PDF uploads over a hardened REST API, queues jobs for async worker processing, and returns structured risk reports from a two-tier ML cascade:
-BART-MNLI zero-shot clause classification feeding into fine-tuned RoBERTa span extraction on flagged clauses, with rule-based risk flags and verbatim evidence spans.
+Verity accepts PDF contract uploads over a hardened REST API, queues each job on Redis Streams for async worker processing, and returns a structured risk report. A two-tier ML cascade drives it: BART-MNLI zero-shot clause classification gates a **fine-tuned RoBERTa** span extractor that pulls verbatim evidence spans with exact character offsets, and a spaCy rule layer adds explainable risk flags. A separate **grounded RAG** endpoint answers free-text questions against a contract and rejects any answer whose citations are not verbatim substrings of the retrieved text.
+
+Delivery is **at-least-once**: Redis Streams consumer groups hold each job until it is acknowledged, and `XAUTOCLAIM` reclaims jobs from workers that crash mid-flight, so no in-flight job is silently lost. `POST /jobs` is idempotent, retries resume from the last completed pipeline stage rather than re-running ingestion, and a per-chunk extractor timeout degrades to the tier-1 label instead of failing the job. Everything here is measured: span extraction goes from 0.41 to 0.73 trimmed macro F1 after fine-tuning, the RAG endpoint scores 0.98 faithfulness under a cross-model **LLM-as-judge** harness, and a single worker sustains 9.6 jobs/min under Locust with zero server errors.
 
 Legal contract review is slow and expensive.
 Lawyers spend time locating clauses that a well-built system can classify and flag in seconds.
@@ -33,59 +29,46 @@ This pipeline handles that pre-screening layer: classify every clause, match ris
 The goal is to automate the repetitive part and surface structured evidence so that review is faster and more consistent.
 The judgment on what to negotiate stays with the lawyer.
 
-## Highlights
+## What it produces
 
-- **At-least-once delivery** with crash recovery: Redis Streams consumer groups plus `XAUTOCLAIM` reclaim of dead workers. No in-flight job is silently lost.
-- **Two-tier ML cascade** lifts span-extraction trimmed macro F1 from 0.41 (zero-shot) to 0.73 (fine-tuned base).
-- **Grounded RAG**: a post-generation citation check rejects fabricated quotes or chunk ids with `502`.
+Given a clause, the scorer emits risk flags that point at the exact triggering span, with character offsets into the source text so a reviewer can jump straight to it.
 
-<details>
-<summary><b>Reliability and delivery</b> - idempotency, stage-checkpointed retries</summary>
+Input clause:
 
-- **At-least-once delivery** via Redis Streams consumer groups. Jobs stay in the pending-entries list until `XACK`. Crashed workers are reclaimed by `XAUTOCLAIM` after a configurable idle threshold; no in-flight job is silently lost.
-- **Idempotent `POST /jobs`** with client-supplied or content-hash dedup keys. Concurrent first-time submissions race at the DB layer via a unique constraint; the loser returns the winner's `job_id` with `Idempotent-Replay: true`.
-- **Stage-checkpointed retries.** The worker persists which pipeline stage completed before a failure. A retry resumes from the last successful stage; a transient scoring error does not re-run ingestion or classification.
+> The Administrative Agent shall have sole discretion to accelerate the Loans, and the Borrower shall indemnify and hold harmless each Lender from all losses.
 
-</details>
+Flags:
 
-<details>
-<summary><b>API hardening</b> - timing-safe auth, pre-parse upload caps, rate limits</summary>
+```json
+[
+  {"id": "unilateral_discretion", "severity": "high", "reason": "Unilateral decision right", "matched_text": "sole discretion", "start": 36, "end": 51},
+  {"id": "broad_indemnification", "severity": "high", "reason": "Broad indemnification obligation", "matched_text": "indemnify and hold harmless", "start": 100, "end": 127}
+]
+```
 
-- **Hardened API layer.** Timing-safe key auth (`hmac.compare_digest`), pre-parse upload cap via middleware (411 and 413 before multipart parsing is attempted), and per-IP rate limits with `Retry-After`.
+`text[36:51]` is `"sole discretion"` and `text[100:127]` is `"indemnify and hold harmless"`. The offsets are exact, not approximate.
 
-</details>
+The `/ask` endpoint answers free-text questions and verifies every citation is a verbatim substring of the retrieved chunks before returning. A real answer from the eval set:
 
-<details>
-<summary><b>Observability and load</b> - Prometheus on both tiers, Locust results</summary>
+> **Q:** Who is the Administrative Agent under this agreement?
+>
+> **A:** The Administrative Agent is Bank of America, N.A.
+>
+> **Citation** - chunk `a9f0d1f5`, quote: BANK OF AMERICA, N.A., as administrative agent (the "Administrative Agent")
 
-- **Prometheus metrics on both tiers.** API and worker each expose a scrape target. Tracked series: submissions, completions, per-stage duration histograms, per-stage error counts, and queue depth.
-- **Empirically validated under Locust.** 9.6 jobs/min sustained at one worker, submit p50 14ms under load and 62ms under a 20 VU spike, zero server errors across both. Rate limiting fires with `Retry-After`; span extractor timeout degrades to tier-1 labels without failing the job.
+If a cited quote were not present verbatim in the retrieved text, the request would return `502` instead of the answer.
 
-</details>
+## Reliability
 
-<details>
-<summary><b>ML cascade</b> - BART-MNLI zero-shot into fine-tuned RoBERTa span extraction</summary>
+**At-least-once delivery.** Jobs sit in a Redis Streams consumer group and stay in the pending-entries list until `XACK`. A crashed worker's in-flight jobs are reclaimed by `XAUTOCLAIM` after a configurable idle threshold, so nothing is silently dropped.
 
-- **Cascade ML pipeline.** BART-MNLI zero-shot classifies a clause type across 10 labels. A fine-tuned RoBERTa model trained on CUAD v1 extracts verbatim spans when tier-1 confidence meets the threshold and the clause maps to a CUAD category. Trimmed macro F1 goes from 0.41 (zero-shot) to 0.73 (fine-tuned base). A spaCy `Matcher` and YAML rule DSL layer produces explainable risk flags with exact character offsets. Per-chunk extraction timeout falls back to tier-1 without failing the job.
+**Idempotent submission.** `POST /jobs` dedups on a client-supplied or content-hash key. Two concurrent first-time submissions race at the database's unique constraint; the loser gets the winner's `job_id` back with `Idempotent-Replay: true` instead of a duplicate job.
 
-</details>
+**Stage-checkpointed retries.** The worker records which pipeline stage last completed. A retry resumes from there, so a transient scoring error does not re-run ingestion or classification.
 
-<details>
-<summary><b>RAG and evals</b> - grounded citations, audit log, LLM-as-judge harness</summary>
+**Hardened API.** Timing-safe key comparison (`hmac.compare_digest`), a pre-parse upload cap enforced in middleware (411 and 413 before multipart parsing starts), and per-IP rate limits with `Retry-After`.
 
-- **RAG query endpoint with verified citations.** `POST /jobs/{id}/ask` runs free-text questions against the contract's chunks. Local BGE-small embeddings stored in a pgvector column on Postgres, cosine-similarity retrieval, Claude generation with structured outputs, and a post-generation grounding check that rejects fabricated quotes or chunk ids with `502`. The deterministic pipeline remains fully functional without this endpoint.
-- **Auditable RAG calls.** Every `/ask` is persisted to a `rag_queries` table: the question, ordered retrieved chunk ids, answer, citations, token usage, retrieval and generation latency, and the terminal outcome (answered, refused, or error with the grounding failure). Storing chunk ids rather than text reconstructs the exact prompt for any past call, since chunks are immutable. Writes are best-effort and never fail a good answer.
-- **Hand-rolled RAG eval harness with LLM-as-judge.** 46 cases across three contracts (two credit agreements, one services agreement), scored on faithfulness, citation accuracy, completeness, and refusal correctness, including adversarial refusal cases that ask for plausible-but-absent clauses. Judge model (`claude-haiku-4-5`) is deliberately different from the generator (`claude-sonnet-4-6`) to reduce self-grading bias, and judge calls use strict tool use so a malformed judgment cannot poison a run. Aggregate 0.982 / 0.946 / 0.935 / 0.957; the documented soft spot is retrieval recall on buried facts, where the system refuses rather than fabricates. CI re-runs a frozen subset on PRs touching the RAG surface.
-
-</details>
-
-<details>
-<summary><b>Testing and ops</b> - 239 tests, single-command stack</summary>
-
-- **239 tests** covering API contracts, pipeline stages, queue semantics, auth, rate limits, idempotency, upload sizing, span extraction, timeout fallback, embeddings, citation grounding, the RAG endpoint, the LLM judges, and the CUAD feature prep, span aggregation, and eval harness.
-- **Single-command local stack** via Docker Compose (Postgres+pgvector, Redis, MinIO, API, worker).
-
-</details>
+**Measured under load.** Prometheus metrics on both tiers cover submissions, completions, per-stage duration and error counts, and queue depth. Under Locust, one worker sustains 9.6 jobs/min, submit latency holds at 14 ms p50 (62 ms under a 20 VU spike), and both runs record zero server errors. Rate limiting fires with `Retry-After`, and a span-extractor timeout degrades to tier-1 labels without failing the job.
 
 ## Architecture
 
@@ -185,8 +168,9 @@ Measurement dates: RAG eval scores are the full 46-case run from 2026-07-03, loa
 
 *Per-category F1 across all 41 CUAD categories. Blue is BART-MNLI zero-shot; orange and green are fine-tuned RoBERTa (base and large). Fine-tuning closes the largest gaps on categories zero-shot barely handles (Anti-Assignment, Effective Date, Governing Law, Expiration Date).*
 
-RAG eval is a 46-case dataset across three contract genres (two credit agreements, one services agreement sourced from SEC EDGAR), scored by an LLM judge (`claude-haiku-4-5`) that is deliberately different from the generator (`claude-sonnet-4-6`) to reduce self-grading bias. Four refusal cases are adversarial: they ask for clauses that are plausible for the genre but absent from the document, such as SLA credits or minimum insurance coverage in a services agreement. Two soft spots are documented. Refusal correctness (0.957) reflects one adversarial case answered with a cited "not specified in this agreement" instead of a refusal. Completeness (0.935) reflects retrieval misses on buried facts: when the relevant clause is not in the retrieved top-k, the system refuses or answers conservatively from what it did retrieve rather than fabricating. Full methodology is in [cuad/README.md](cuad/README.md).
+The RAG eval is a 46-case dataset across three contract genres (two credit agreements and one services agreement, sourced from SEC EDGAR). The judge model (`claude-haiku-4-5`) is deliberately different from the generator (`claude-sonnet-4-6`): no model grades its own output, which removes the same-model self-preference bias that same-family LLM-as-judge setups carry. Judge calls use strict tool use, so a malformed judgment cannot poison a run.
 
+Four refusal cases are adversarial: they ask for clauses that are plausible for the genre but absent from the document, such as SLA credits or minimum insurance coverage in a services agreement. Two soft spots are documented. Refusal correctness (0.957) reflects one adversarial case answered with a cited "not specified in this agreement" instead of a refusal. Completeness (0.935) reflects retrieval misses on buried facts: when the relevant clause is not in the retrieved top-k, the system refuses or answers conservatively from what it did retrieve rather than fabricating. Full methodology is in [cuad/README.md](cuad/README.md).
 
 ## Stack
 
