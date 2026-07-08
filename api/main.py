@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Contract Risk Pipeline", lifespan=lifespan)
+app = FastAPI(title="Verity", lifespan=lifespan)
 app.state.limiter = limiter
 
 

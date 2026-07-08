@@ -10,7 +10,7 @@
 
 [![Redis](https://img.shields.io/badge/Redis%207-Streams-DC382D?logo=redis&logoColor=white)](https://redis.io/docs/latest/develop/data-types/streams/)
 [![fine-tune](https://img.shields.io/badge/fine--tune-RoBERTa%20on%20CUAD%20v1-2b6cb0)](cuad/README.md)
-[![HuggingFace](https://img.shields.io/badge/HuggingFace-Transformers-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-roberta--base--squad2--cuad-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/Mjolnirslams/roberta-base-squad2-cuad)
 [![Anthropic](https://img.shields.io/badge/Anthropic-Sonnet%20%2B%20Haiku-D97757?logo=anthropic&logoColor=white)](#rag-query-flow-post-ask)
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -208,6 +208,17 @@ docker compose up --build
 **Set up the RAG endpoint backend (optional, only needed for `/ask`):**
 
 Set `ANTHROPIC_API_KEY=sk-ant-...` in `.env`. Key from `console.anthropic.com` (separate from a Claude.ai subscription).
+
+**Enable the tier-2 span extractor (optional):**
+
+Out of the box the pipeline runs tier-1 zero-shot classification only. Tier-2 needs the fine-tuned model:
+
+```bash
+uv run hf download Mjolnirslams/roberta-base-squad2-cuad \
+  --local-dir cuad/artifacts/models/roberta_base_squad2_cuad
+```
+
+Then set `SPAN_EXTRACTOR_ENABLED=true` in `.env`. To train it from scratch instead, run `uv run python cuad/run.py` (see [cuad/README.md](cuad/README.md)).
 
 **Submit a job:**
 ```bash

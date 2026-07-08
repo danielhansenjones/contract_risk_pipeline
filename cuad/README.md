@@ -12,6 +12,8 @@ Tier-2 of the classification cascade: a fine-tuned extractive QA model on CUAD v
 
 Trimmed macro-F1 excludes categories with fewer than 30 positive spans in the test set; full macro-F1 over all 41 categories is recorded alongside in the artifacts.
 
+The fine-tuned base model is published at [Mjolnirslams/roberta-base-squad2-cuad](https://huggingface.co/Mjolnirslams/roberta-base-squad2-cuad) with a full model card.
+
 ## Caveats
 
 **Category coverage.** CUAD has 41 clause categories. Macro-F1 is reported in two forms: full (all 41) and trimmed (excluding low-N categories where per-category F1 is unstable). The trimmed figure is the meaningful one for model comparison.

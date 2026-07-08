@@ -1,6 +1,6 @@
 # Technical Reference
 
-Depth document for the Contract Risk Pipeline. The [README](README.md) is the entry point and quick start; this file is the implementation reference.
+Depth document for Verity. The [README](README.md) is the entry point and quick start; this file is the implementation reference.
 
 ## Auth
 
@@ -233,7 +233,7 @@ Single-worker Locust runs at light and 20 VU spike loads completed with zero 5xx
 ## Project Structure
 
 ```
-contract-risk-pipeline/
+verity/
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
@@ -242,12 +242,15 @@ contract-risk-pipeline/
 ├── scripts/
 │   ├── run.py
 │   ├── test.py
-│   └── backfill_embeddings.py
+│   ├── backfill_embeddings.py
+│   └── *.sql
 ├── shared/        # settings, models, queue and storage clients
 ├── api/           # FastAPI routes, RAG retrieval, LLM client
 ├── worker/        # worker loop and processors
 └── tests/
 ```
+
+`scripts/*.sql` are one-off DDL migrations for databases created before the current schema: `migrate_to_tz_aware.sql` (timestamptz columns, chunk uniqueness), `drop_retrying_enum.sql` (removes the dead RETRYING status value), `add_rag_query_indexes.sql` (audit-log read-path indexes). A fresh bootstrap via `scripts/init_db.py` builds the same schema directly and does not need them.
 
 ## Fault Tolerance
 
