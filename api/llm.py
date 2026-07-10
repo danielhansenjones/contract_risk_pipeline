@@ -4,6 +4,13 @@ from typing import Optional
 
 import anthropic
 import httpx
+from anthropic.types import (
+    CacheControlEphemeralParam,
+    MessageParam,
+    TextBlockParam,
+    ToolChoiceToolParam,
+    ToolParam,
+)
 from pydantic import BaseModel, Field
 
 from shared.models import Chunk
@@ -82,7 +89,7 @@ def _client() -> anthropic.Anthropic:
     if _anthropic is None:
         if not settings.anthropic_api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-        _anthropic = anthropic.Anthropic(
+        client = anthropic.Anthropic(
             api_key=settings.anthropic_api_key,
             timeout=httpx.Timeout(
                 connect=settings.anthropic_connect_timeout_s,
@@ -91,6 +98,8 @@ def _client() -> anthropic.Anthropic:
                 pool=5.0,
             ),
         )
+        _anthropic = client
+        return client
     return _anthropic
 
 
@@ -103,24 +112,24 @@ def ask(question: str, chunks: list[Chunk]) -> tuple[AnswerResponse, dict]:
         model=settings.anthropic_model,
         max_tokens=settings.anthropic_max_tokens,
         system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
+            TextBlockParam(
+                type="text",
+                text=SYSTEM_PROMPT,
+                cache_control=CacheControlEphemeralParam(type="ephemeral"),
+            )
         ],
-        messages=[{"role": "user", "content": user_prompt}],
+        messages=[MessageParam(role="user", content=user_prompt)],
         tools=[
-            {
-                "name": "submit_answer",
-                "description": (
+            ToolParam(
+                name="submit_answer",
+                description=(
                     "Submit the final answer to the user's question with"
                     " grounded citations."
                 ),
-                "input_schema": AnswerResponse.model_json_schema(),
-            }
+                input_schema=AnswerResponse.model_json_schema(),
+            )
         ],
-        tool_choice={"type": "tool", "name": "submit_answer"},
+        tool_choice=ToolChoiceToolParam(type="tool", name="submit_answer"),
     )
 
     tool_use_blocks = [b for b in msg.content if b.type == "tool_use"]
