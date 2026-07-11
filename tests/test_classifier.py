@@ -145,8 +145,10 @@ def test_span_extraction_populates_chunk_fields(make_job, make_chunk, db_session
 
 
 def test_span_extraction_timeout_falls_back_to_tier1(make_job, make_chunk, db_session):
+    # Label must be one with CUAD coverage (category_mapping.json), otherwise
+    # tier-2 never fires and the test passes without exercising the timeout.
     job = make_job(stage=JobStage.CLASSIFICATION)
-    make_chunk(job.id, "The parties shall indemnify each other.", index=0)
+    make_chunk(job.id, "Either party may terminate this agreement.", index=0)
 
     extractor = MagicMock()
     extractor.extract.side_effect = lambda text, categories: (time.sleep(1), {})[1]
@@ -158,13 +160,55 @@ def test_span_extraction_timeout_falls_back_to_tier1(make_job, make_chunk, db_se
         run(
             job,
             db_session,
-            make_classifier_pipeline(label="indemnification", score=0.95),
+            make_classifier_pipeline(label="termination", score=0.95),
             span_extractor=extractor,
         )
 
     chunk = db_session.query(Chunk).filter(Chunk.job_id == job.id).first()
-    assert chunk.clause_type == "indemnification"
+    assert extractor.extract.called
+    assert chunk.clause_type == "termination"
     assert chunk.extracted_span is None
+
+
+def test_span_timeout_does_not_starve_later_chunks(make_job, make_chunk, db_session):
+    """A hung extraction must not leave later chunks queued behind it."""
+    job = make_job(stage=JobStage.CLASSIFICATION)
+    make_chunk(job.id, "Either party may terminate this agreement.", index=0)
+    make_chunk(job.id, "This agreement terminates upon written notice.", index=1)
+
+    calls = {"n": 0}
+
+    def extract(text, categories):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            time.sleep(0.5)
+            return {}
+        return {
+            "Termination For Convenience": {"text": "may terminate", "score": 0.9}
+        }
+
+    extractor = MagicMock()
+    extractor.extract.side_effect = extract
+
+    with patch("worker.processors.classifier.settings") as mock_settings:
+        mock_settings.span_extractor_tier1_confidence_threshold = 0.7
+        mock_settings.span_extractor_timeout_s = 0.05
+
+        run(
+            job,
+            db_session,
+            make_classifier_pipeline(label="termination", score=0.95),
+            span_extractor=extractor,
+        )
+
+    chunks = (
+        db_session.query(Chunk)
+        .filter(Chunk.job_id == job.id)
+        .order_by(Chunk.index)
+        .all()
+    )
+    assert chunks[0].extracted_span is None
+    assert chunks[1].extracted_span == "may terminate"
 
 
 def test_all_clause_labels_can_be_assigned(make_job, make_chunk, db_session):

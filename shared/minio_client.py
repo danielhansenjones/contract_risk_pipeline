@@ -70,6 +70,10 @@ class StorageClient:
     def presigned_url(self, object_key: str, expires_seconds: int = 3600) -> str:
         from datetime import timedelta
 
+        # Signed against minio_host (the compose-internal name), and the
+        # signature covers the Host header, so the URL only resolves where
+        # that name does. See TECHNICAL.md "Report output" for the host-side
+        # workaround.
         try:
             return self._client.presigned_get_object(
                 self._bucket,

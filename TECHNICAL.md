@@ -31,6 +31,7 @@ Duplicate submissions to `POST /jobs` return the existing job rather than creati
 - Keys are namespaced (`client:*` vs `content:*`) so a client key that happens to match a content hash cannot collide.
 - Replays return `200 OK` (not `201`) with an `Idempotent-Replay: true` header and the current state of the existing job.
 - Concurrent first-time submissions with the same key are resolved at the database layer via a unique constraint; the losing request returns the winner's job id.
+- Replay ignores job status. A job that exhausted its retries and failed stays bound to its dedup key, so resubmitting the identical PDF returns the failed job rather than reprocessing it. To force a rerun of the same content, send a fresh `Idempotency-Key`.
 
 ```bash
 curl -X POST http://localhost:8000/jobs \
@@ -109,6 +110,14 @@ Aggregates chunk scores and flags into a `RiskResult`, writes the full JSON repo
 ```
 
 `evidence_source: "extracted_span"` means the flag excerpt is the verbatim span returned by the tier-2 model. When tier-2 does not fire or times out, `evidence_source` is `"chunk_text"` and the excerpt is taken from a window around the matched token span.
+
+The response also carries a `report_url`: a presigned MinIO link to the full JSON report, valid for one hour. The URL is signed against `minio:9000`, the compose-internal hostname, and the signature covers the Host header, so rewriting the hostname breaks it. Inside the compose network it works as-is. To open it from the host, map the name to loopback once (compose already publishes port 9000):
+
+```bash
+echo "127.0.0.1 minio" | sudo tee -a /etc/hosts
+```
+
+A deployment that serves reports to external clients should presign against a public endpoint instead.
 
 ## RAG query layer
 

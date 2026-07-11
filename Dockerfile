@@ -31,4 +31,10 @@ from transformers import pipeline; \
 pipeline('zero-shot-classification', model='facebook/bart-large-mnli'); \
 pipeline('text-classification', model='distilbert-base-uncased-finetuned-sst-2-english')"
 
+# bge-small-en-v1.5 embeds chunks at ingestion and queries at /ask.
+# Separate layer so adding it didn't invalidate the ~4 GB layer above.
+RUN python -c "\
+from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('BAAI/bge-small-en-v1.5')"
+
 COPY --chown=appuser:appuser . .

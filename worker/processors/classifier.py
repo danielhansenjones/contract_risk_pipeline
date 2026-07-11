@@ -1,8 +1,8 @@
 import concurrent.futures
 import json
 import logging
-import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 _CONFIDENCE_THRESHOLD = 0.5
 _BATCH_SIZE = 8
 
-_MAPPING_PATH = os.path.join(
-    os.path.dirname(__file__), "category_mapping.json"
-)
+_MAPPING_PATH = Path(__file__).with_name("category_mapping.json")
 
 with open(_MAPPING_PATH) as _f:
     _raw = json.load(_f)
@@ -120,6 +118,13 @@ def run(
                             "for chunk=%s after %.1fs",
                             chunk.id,
                             settings.span_extractor_timeout_s,
+                        )
+                        # The timed-out inference still occupies the executor's
+                        # only worker thread; without a fresh executor every
+                        # later chunk queues behind it and times out too.
+                        span_executor.shutdown(wait=False)
+                        span_executor = concurrent.futures.ThreadPoolExecutor(
+                            max_workers=1
                         )
                     except Exception:
                         logger.warning(
