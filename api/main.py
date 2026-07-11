@@ -21,7 +21,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse, Response as FastAPIResponse
 from minio.error import S3Error
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
@@ -138,6 +138,8 @@ class JobCreatedResponse(BaseModel):
 
 
 class JobStatusResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     status: str
     stage: str
@@ -158,6 +160,8 @@ class ReportResponse(BaseModel):
 
 
 class JobListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     status: str
     stage: str
@@ -171,6 +175,8 @@ class AskRequest(BaseModel):
 
 
 class RagQueryListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     job_id: str
     question: str
@@ -182,6 +188,12 @@ class RagQueryListItem(BaseModel):
     grounding_error: Optional[str]
     error: Optional[str]
     created_at: datetime
+
+    @field_validator("question")
+    @classmethod
+    def _truncate_question(cls, v: str) -> str:
+        # Admin listing view; full text stays in the rag_queries table.
+        return v[:200]
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -259,6 +271,9 @@ def submit_job(
     dedup_key = _dedup_key(idempotency_key, pdf_bytes)
 
     # Fast path: existing dedup row short-circuits before any storage or queue work.
+    # Replay ignores job status, so a failed job stays pinned to its key: an
+    # identical resubmission returns the failed job instead of reprocessing.
+    # Clients force a rerun by sending a fresh Idempotency-Key.
     with get_session() as db:
         existing = db.query(JobDedup).filter(JobDedup.key == dedup_key).first()
         if existing is not None:
@@ -367,16 +382,7 @@ def list_jobs(request: Request, status: Optional[str] = Query(default=None)):
                 raise HTTPException(status_code=400, detail=f"Unknown status: {status}")
             q = q.filter(Job.status == status_enum)
         jobs = q.limit(100).all()
-        return [
-            JobListItem(
-                id=j.id,
-                status=j.status,
-                stage=j.stage,
-                filename=j.filename,
-                created_at=j.created_at,
-            )
-            for j in jobs
-        ]
+        return [JobListItem.model_validate(j) for j in jobs]
 
 
 @app.get(
@@ -390,15 +396,7 @@ def get_job(request: Request, job_id: str):
         job = db.get(Job, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        return JobStatusResponse(
-            id=job.id,
-            status=job.status,
-            stage=job.stage,
-            filename=job.filename,
-            retry_count=job.retry_count,
-            error=job.error,
-            created_at=job.created_at,
-        )
+        return JobStatusResponse.model_validate(job)
 
 
 def _log_rag_query(
@@ -659,22 +657,7 @@ def list_rag_queries(
         if before_dt is not None:
             q = q.filter(RagQuery.created_at < before_dt)
         rows = q.order_by(RagQuery.created_at.desc()).limit(limit).all()
-        return [
-            RagQueryListItem(
-                id=r.id,
-                job_id=r.job_id,
-                question=r.question[:200],
-                outcome=r.outcome,
-                retrieval_ms=r.retrieval_ms,
-                generation_ms=r.generation_ms,
-                input_tokens=r.input_tokens,
-                output_tokens=r.output_tokens,
-                grounding_error=r.grounding_error,
-                error=r.error,
-                created_at=r.created_at,
-            )
-            for r in rows
-        ]
+        return [RagQueryListItem.model_validate(r) for r in rows]
 
 
 @app.get(
@@ -705,7 +688,9 @@ def get_report(
         if result is None:
             raise HTTPException(status_code=404, detail="Report not found")
         if result.report_key is None:
-            # Partial assembler write: DB row committed before MinIO upload.
+            # Defensive: the assembler uploads to MinIO before committing the
+            # row, so this should be unreachable; guard rather than presign
+            # None and 500.
             raise HTTPException(
                 status_code=404,
                 detail="Report blob not available (partial write)",
